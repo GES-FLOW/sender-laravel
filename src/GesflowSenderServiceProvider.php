@@ -2,12 +2,15 @@
 
 namespace Gesflow\Sender;
 
+use Gesflow\Sender\Console\CheckCommand;
 use Gesflow\Sender\Http\Connector;
 use Gesflow\Sender\Http\Controllers\WebhookController;
 use Gesflow\Sender\Http\Middleware\VerifyWebhookSignature;
 use Gesflow\Sender\Notifications\GesflowSenderChannel;
+use Gesflow\Sender\Support\PhoneNumber;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Foundation\CachesRoutes;
+use Illuminate\Foundation\Console\AboutCommand;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Notifications\ChannelManager;
 use Illuminate\Support\Facades\Notification;
@@ -47,13 +50,46 @@ class GesflowSenderServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $config = $this->app->make('config');
+        $countryCode = $config->get('gesflow-sender.default_country_code');
+
+        PhoneNumber::defaultCountryCode(is_scalar($countryCode) ? (string) $countryCode : null);
+
         if ($this->app->runningInConsole()) {
             $this->publishes([
                 __DIR__.'/../config/gesflow-sender.php' => $this->app->configPath('gesflow-sender.php'),
             ], 'gesflow-sender-config');
+
+            $this->commands([CheckCommand::class]);
         }
 
         $this->registerWebhookRoute();
+        $this->registerAboutSection();
+    }
+
+    /**
+     * The SDK's section of « php artisan about ».
+     */
+    protected function registerAboutSection(): void
+    {
+        if (! class_exists(AboutCommand::class)) {
+            return;
+        }
+
+        AboutCommand::add('GESFLOW SENDER', function (): array {
+            $config = $this->app->make('config');
+            $path = $config->get('gesflow-sender.webhooks.path');
+            $configured = fn (mixed $value): string => filled($value) ? '<fg=green;options=bold>CONFIGURÉ</>' : '<fg=yellow;options=bold>ABSENT</>';
+
+            return [
+                'Version' => Connector::version(),
+                'URL de l\'API' => (string) $config->get('gesflow-sender.base_url'),
+                'Clé API' => $configured($config->get('gesflow-sender.api_key')),
+                'Sender ID' => (string) ($config->get('gesflow-sender.sender_id') ?: '-'),
+                'Webhooks' => is_string($path) && trim($path, '/') !== '' ? '/'.trim($path, '/') : 'DÉSACTIVÉS',
+                'Secret des webhooks' => $configured($config->get('gesflow-sender.webhooks.secret')),
+            ];
+        });
     }
 
     /**

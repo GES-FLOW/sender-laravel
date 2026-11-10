@@ -8,6 +8,7 @@ use Gesflow\Sender\Data\Message;
 use Gesflow\Sender\Data\Page;
 use Gesflow\Sender\Data\SenderId;
 use Gesflow\Sender\Enums\Channel;
+use Gesflow\Sender\Enums\TransactionType;
 use Gesflow\Sender\Http\Connector;
 use Gesflow\Sender\Messages\GesflowMessage;
 use Gesflow\Sender\Messages\PendingBulkMessage;
@@ -21,6 +22,9 @@ use Gesflow\Sender\Resources\Otp;
 use Gesflow\Sender\Resources\Payments;
 use Gesflow\Sender\Resources\Templates;
 use Gesflow\Sender\Support\Cast;
+use Gesflow\Sender\Support\SmsCounter;
+use Illuminate\Support\LazyCollection;
+use SensitiveParameter;
 
 /**
  * Client de l'API GESFLOW SENDER.
@@ -33,6 +37,23 @@ class GesflowSender
         protected Connector $connector,
         protected ?string $defaultSenderId = null,
     ) {}
+
+    /**
+     * Le même client, pour un autre compte GESFLOW SENDER : utile quand
+     * chacun de vos clients a sa propre clé API.
+     *
+     *     GesflowSender::withApiKey($boutique->gesflow_api_key, 'MaBoutique')->sms(...)->send();
+     *
+     * @param  string|null  $defaultSenderId  Sender ID par défaut de ce compte (sinon celui de la configuration)
+     */
+    public function withApiKey(#[SensitiveParameter] string $apiKey, ?string $defaultSenderId = null): static
+    {
+        $client = clone $this;
+        $client->connector = $this->connector->withApiKey($apiKey);
+        $client->defaultSenderId = $defaultSenderId ?? $this->defaultSenderId;
+
+        return $client;
+    }
 
     /**
      * Prépare un SMS : chaînez from(), at(), callbackUrl()… puis send().
@@ -135,17 +156,52 @@ class GesflowSender
     }
 
     /**
+     * Prix estimé d'un SMS, au tarif de votre compte : prix d'un SMS × nombre
+     * de SMS facturés pour ce texte × destinataires. Les {{ variables }}
+     * rendent l'estimation approximative.
+     */
+    public function smsCost(string $text, int $recipients = 1): float
+    {
+        return SmsCounter::count($text)->cost((float) $this->account()->smsPrice, $recipients);
+    }
+
+    /**
      * Mouvements du solde, du plus récent au plus ancien.
      *
-     * @param  string|null  $type  Filtre : payment, message_charge, message_refund…
      * @return Page<CreditTransaction>
      */
-    public function transactions(?string $type = null, int $page = 1): Page
+    public function transactions(TransactionType|string|null $type = null, int $page = 1): Page
     {
         return Page::fromResponse(
-            $this->connector->get('account/transactions', ['type' => $type, 'page' => $page]),
+            $this->connector->get('account/transactions', [
+                'type' => $type instanceof TransactionType ? $type->value : $type,
+                'page' => $page,
+            ]),
             CreditTransaction::fromArray(...),
         );
+    }
+
+    /**
+     * Tous les mouvements du solde, les pages étant chargées au fil de
+     * l'itération.
+     *
+     * @return LazyCollection<int, CreditTransaction>
+     */
+    public function transactionsCursor(TransactionType|string|null $type = null): LazyCollection
+    {
+        return LazyCollection::make(function () use ($type) {
+            $page = 1;
+
+            do {
+                $result = $this->transactions($type, $page);
+
+                foreach ($result->items as $transaction) {
+                    yield $transaction;
+                }
+
+                $page = $result->nextPage();
+            } while ($page !== null);
+        });
     }
 
     /**

@@ -13,6 +13,7 @@ use Gesflow\Sender\Exceptions\RequestRejectedException;
 use Gesflow\Sender\Exceptions\ServerException;
 use Gesflow\Sender\Exceptions\ValidationException;
 use Gesflow\Sender\Facades\GesflowSender;
+use Gesflow\Sender\Http\Connector;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Psr7\Request as Psr7Request;
 use Illuminate\Http\Client\Request;
@@ -68,11 +69,38 @@ it('retries server errors with the same idempotency key', function () {
 });
 
 it('gives up after the configured number of retries', function () {
-    Http::fake([apiUrl('messages') => Http::response(['message' => 'Erreur interne.'], 500)]);
+    Http::fake([apiUrl('messages') => Http::response(['message' => 'Service indisponible.'], 503)]);
 
     expect(fn () => GesflowSender::sms('242066123456', 'Test')->send())->toThrow(ServerException::class);
 
     Http::assertSentCount(3);
+});
+
+it('never retries a write that failed inside the application', function () {
+    Http::fake([apiUrl('messages') => Http::response(['message' => 'Server Error'], 500)]);
+
+    expect(fn () => GesflowSender::sms('242066123456', 'Test')->send())->toThrow(ServerException::class);
+
+    Http::assertSentCount(1);
+});
+
+it('retries reads on any server error', function () {
+    Http::fake([apiUrl('account') => Http::sequence()
+        ->push(['message' => 'Server Error'], 500)
+        ->push(['data' => ['id' => 3, 'name' => 'Ma Boutique', 'credit_balance' => '10.0000']])]);
+
+    expect(GesflowSender::account()->name)->toBe('Ma Boutique');
+
+    Http::assertSentCount(2);
+});
+
+it('identifies the SDK version in the User-Agent', function () {
+    Http::fake([apiUrl('account') => Http::response(['data' => ['id' => 3, 'name' => 'Ma Boutique']])]);
+
+    GesflowSender::account();
+
+    Http::assertSent(fn (Request $request): bool => $request->header('User-Agent')[0] === Connector::userAgent()
+        && preg_match('#^GesflowSender-Laravel/\S+ PHP/\d+\.\d+$#', $request->header('User-Agent')[0]) === 1);
 });
 
 it('does not retry client errors', function () {

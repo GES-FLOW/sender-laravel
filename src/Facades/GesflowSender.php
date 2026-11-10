@@ -4,9 +4,13 @@ namespace Gesflow\Sender\Facades;
 
 use Gesflow\Sender\Data\Account;
 use Gesflow\Sender\Data\CreditTransaction;
+use Gesflow\Sender\Data\InboundMessage;
 use Gesflow\Sender\Data\Message;
 use Gesflow\Sender\Data\Page;
 use Gesflow\Sender\Data\SenderId;
+use Gesflow\Sender\Enums\Channel;
+use Gesflow\Sender\Enums\MessageStatus;
+use Gesflow\Sender\Enums\TransactionType;
 use Gesflow\Sender\Messages\GesflowMessage;
 use Gesflow\Sender\Messages\PendingBulkMessage;
 use Gesflow\Sender\Messages\PendingMessage;
@@ -22,8 +26,10 @@ use Gesflow\Sender\Testing\GesflowSenderFake;
 use Gesflow\Sender\Testing\RecordedRequest;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Facade;
+use Illuminate\Support\LazyCollection;
 
 /**
+ * @method static \Gesflow\Sender\GesflowSender withApiKey(string $apiKey, ?string $defaultSenderId = null)
  * @method static PendingMessage sms(string $phone, string $text = '')
  * @method static PendingMessage whatsapp(string $phone, string $text = '')
  * @method static Message send(GesflowMessage $message)
@@ -39,7 +45,9 @@ use Illuminate\Support\Facades\Facade;
  * @method static Payments payments()
  * @method static Account account()
  * @method static float balance()
- * @method static Page<CreditTransaction> transactions(?string $type = null, int $page = 1)
+ * @method static float smsCost(string $text, int $recipients = 1)
+ * @method static Page<CreditTransaction> transactions(TransactionType|string|null $type = null, int $page = 1)
+ * @method static LazyCollection<int, CreditTransaction> transactionsCursor(TransactionType|string|null $type = null)
  * @method static list<SenderId> senderIds()
  * @method static bool hasWhatsapp(string $phone)
  * @method static Collection<int, Message> sent(?callable $callback = null)
@@ -52,6 +60,11 @@ use Illuminate\Support\Facades\Facade;
  * @method static void assertBulkSent(?callable $callback = null)
  * @method static void assertOtpSent(?string $phone = null)
  * @method static list<RecordedRequest> requests()
+ * @method static GesflowSenderFake failWith(int $status, ?string $message = null, array<string, list<string>> $errors = [], string $endpoint = '*', ?int $times = null)
+ * @method static GesflowSenderFake stopFailing()
+ * @method static GesflowSenderFake withBalance(float $balance)
+ * @method static Message updateStatus(Message|int $message, MessageStatus|string $status, ?string $failureReason = null)
+ * @method static InboundMessage receive(string $phone, string $text, Channel|string $channel = Channel::Sms)
  *
  * @see \Gesflow\Sender\GesflowSender
  * @see GesflowSenderFake

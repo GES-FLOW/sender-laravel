@@ -36,11 +36,11 @@ final class Cast
     }
 
     /**
-     * Digits only, as the API expects phone numbers: "+242 06 612 34 56"
-     * gives "242066123456".
+     * Digits only, with the country code, as the API expects phone numbers:
+     * "+242 06 612 34 56" gives "242066123456". See PhoneNumber.
      */
     public static function phone(string $phone): string
     {
-        return (string) preg_replace('/\D+/', '', $phone);
+        return PhoneNumber::normalize($phone);
     }
 }

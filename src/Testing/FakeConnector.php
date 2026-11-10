@@ -11,6 +11,7 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Str;
 use LogicException;
+use SensitiveParameter;
 
 /**
  * L'API simulée en mémoire par GesflowSender::fake(), qui se comporte
@@ -46,9 +47,78 @@ final class FakeConnector extends Connector
     /** @var array<string, array{verification: array<string, mixed>, code: string, attempts: int}> */
     private array $otps = [];
 
+    /** @var array<int, array{status: int, message: string, errors: array<string, list<string>>, endpoint: string, remaining: int|null}> */
+    private array $failures = [];
+
+    private float $balance = 100000.0;
+
     public function __construct(private ?string $defaultSenderId = null)
     {
         parent::__construct(new Factory, 'https://gesflow-sender.test/api/v1', 'fake');
+    }
+
+    /**
+     * The fake keeps one state whatever the API key: requests made with
+     * GesflowSender::withApiKey() are recorded with the others.
+     */
+    public function withApiKey(#[SensitiveParameter] string $apiKey): static
+    {
+        return $this;
+    }
+
+    /**
+     * Makes the matching requests fail like the API would.
+     *
+     * @param  array<string, list<string>>  $errors
+     */
+    public function failWith(int $status, string $message, array $errors, string $endpoint, ?int $times): void
+    {
+        $this->failures[] = ['status' => $status, 'message' => $message, 'errors' => $errors, 'endpoint' => $endpoint, 'remaining' => $times];
+    }
+
+    public function stopFailing(): void
+    {
+        $this->failures = [];
+    }
+
+    public function setBalance(float $balance): void
+    {
+        $this->balance = $balance;
+    }
+
+    /**
+     * Changes the status of a message, as the delivery reports do.
+     *
+     * @return array<string, mixed>
+     */
+    public function updateMessageStatus(int $id, string $status, ?string $failureReason): array
+    {
+        $message = $this->find('messages', $id);
+
+        return $this->records['messages'][$id] = array_merge($message, [
+            'status' => $status,
+            'failure_reason' => $status === 'failed' ? ($failureReason ?? 'Échec simulé.') : null,
+            'sent_at' => $status === 'sent' ? ($message['sent_at'] ?? CarbonImmutable::now()->toJSON()) : $message['sent_at'],
+        ]);
+    }
+
+    /**
+     * Stores a received message, listed by GET /inbound-messages.
+     *
+     * @return array<string, mixed>
+     */
+    public function receive(string $phone, string $text, string $channel): array
+    {
+        return $this->store('inbound-messages', [
+            'channel' => $channel,
+            'phone' => $phone,
+            'to' => $channel === 'whatsapp' ? null : ($this->defaultSenderId ?? self::DEFAULT_SENDER_ID),
+            'text' => $text,
+            'media_url' => null,
+            'media_mimetype' => null,
+            'received_at' => CarbonImmutable::now()->toJSON(),
+            'read_at' => null,
+        ]);
     }
 
     /**
@@ -77,16 +147,19 @@ final class FakeConnector extends Connector
     protected function send(string $method, string $path, array $options, ?string $idempotencyKey = null): array
     {
         $path = trim($path, '/');
-        /** @var array<string, mixed> $data */
-        $data = (array) ($options['json'] ?? $options['query'] ?? []);
+        [$data, $files] = isset($options['multipart'])
+            ? $this->multipartData((array) $options['multipart'])
+            : [(array) ($options['json'] ?? $options['query'] ?? []), []];
 
-        $this->requests[] = new RecordedRequest($method, $path, $data, $idempotencyKey);
+        $this->requests[] = new RecordedRequest($method, $path, $data, $idempotencyKey, $files);
+
+        $this->failIfRequested($method, $path);
 
         if ($idempotencyKey === null) {
-            return $this->respond($method, $path, $data);
+            return $this->respond($method, $path, $data, $files);
         }
 
-        $fingerprint = hash('sha256', (string) json_encode([$method, $path, $data]));
+        $fingerprint = hash('sha256', (string) json_encode([$method, $path, $data, $files]));
 
         if (isset($this->replays[$idempotencyKey])) {
             if (! hash_equals($this->replays[$idempotencyKey]['fingerprint'], $fingerprint)) {
@@ -96,22 +169,80 @@ final class FakeConnector extends Connector
             return $this->replays[$idempotencyKey]['response'];
         }
 
-        $response = $this->respond($method, $path, $data);
+        $response = $this->respond($method, $path, $data, $files);
         $this->replays[$idempotencyKey] = ['fingerprint' => $fingerprint, 'response' => $response];
 
         return $response;
     }
 
     /**
+     * Throws the error configured with failWith() for this request, if any.
+     */
+    private function failIfRequested(string $method, string $path): void
+    {
+        foreach ($this->failures as $index => $failure) {
+            if (! Str::is($failure['endpoint'], "{$method} {$path}")) {
+                continue;
+            }
+
+            if ($failure['remaining'] !== null) {
+                $remaining = $failure['remaining'] - 1;
+
+                if ($remaining > 0) {
+                    $this->failures[$index]['remaining'] = $remaining;
+                } else {
+                    unset($this->failures[$index]);
+                    $this->failures = array_values($this->failures);
+                }
+            }
+
+            throw $this->error($failure['status'], $failure['message'], $failure['errors']);
+        }
+    }
+
+    /**
+     * The fields and files of a multipart body, as the API reads them.
+     *
+     * @param  array<int|string, mixed>  $parts
+     * @return array{0: array<string, mixed>, 1: array<string, array{filename: string, contents: string}>}
+     */
+    private function multipartData(array $parts): array
+    {
+        $data = [];
+        $lists = [];
+        $files = [];
+
+        foreach ($parts as $part) {
+            if (! is_array($part) || ! isset($part['name'])) {
+                continue;
+            }
+
+            $name = (string) $part['name'];
+            $contents = is_scalar($part['contents'] ?? null) ? (string) $part['contents'] : '';
+
+            if (isset($part['filename'])) {
+                $files[$name] = ['filename' => (string) $part['filename'], 'contents' => $contents];
+            } elseif (str_ends_with($name, '[]')) {
+                $lists[substr($name, 0, -2)][] = $contents;
+            } else {
+                $data[$name] = $contents;
+            }
+        }
+
+        return [array_merge($data, $lists), $files];
+    }
+
+    /**
      * @param  array<string, mixed>  $data
+     * @param  array<string, array{filename: string, contents: string}>  $files
      * @return array<string, mixed>
      */
-    private function respond(string $method, string $path, array $data): array
+    private function respond(string $method, string $path, array $data, array $files = []): array
     {
         /** @var array<string, Closure(int...): array<string, mixed>> $routes */
         $routes = [
             'POST messages' => fn (): array => ['data' => $this->sendMessage($data, $data)],
-            'POST messages/bulk' => fn (): array => $this->sendBulk($data),
+            'POST messages/bulk' => fn (): array => $this->sendBulk($data, $files['file']['contents'] ?? null),
             'GET messages' => fn (): array => $this->paginate('messages', $data),
             'GET messages/{id}' => fn (int $id): array => ['data' => $this->find('messages', $id)],
             'POST messages/{id}/cancel' => fn (int $id): array => ['data' => $this->cancelMessage($id)],
@@ -217,11 +348,12 @@ final class FakeConnector extends Connector
 
     /**
      * @param  array<string, mixed>  $data
+     * @param  string|null  $file  Contents of the contact file
      * @return array<string, mixed>
      */
-    private function sendBulk(array $data): array
+    private function sendBulk(array $data, ?string $file = null): array
     {
-        $phones = $this->bulkRecipients($data);
+        $phones = $this->bulkRecipients($data, $file);
         $now = CarbonImmutable::now();
 
         $campaign = $this->store('campaigns', [
@@ -247,17 +379,47 @@ final class FakeConnector extends Connector
     }
 
     /**
+     * Phone numbers of a CSV or TXT contact file, read like the platform
+     * does: the first cell of each row holding 8 to 15 digits. XLSX files
+     * are not read by the fake.
+     *
+     * @return list<string>
+     */
+    private function filePhones(?string $file): array
+    {
+        if ($file === null || str_starts_with($file, "PK\x03\x04")) {
+            return [];
+        }
+
+        $phones = [];
+
+        foreach (preg_split('/\r\n|\r|\n/', $file) ?: [] as $line) {
+            foreach (preg_split('/[;,\t]/', $line) ?: [] as $cell) {
+                $digits = (string) preg_replace('/\D+/', '', $cell);
+
+                if (preg_match('/^[\d\s+().\-]+$/', trim($cell)) === 1 && strlen($digits) >= 8 && strlen($digits) <= 15) {
+                    $phones[] = $digits;
+
+                    break;
+                }
+            }
+        }
+
+        return $phones;
+    }
+
+    /**
      * Les numéros donnés, puis ceux des contacts des groupes et des tags
      * demandés, sans doublon.
      *
      * @param  array<string, mixed>  $data
      * @return list<string>
      */
-    private function bulkRecipients(array $data): array
+    private function bulkRecipients(array $data, ?string $file = null): array
     {
         $groupIds = array_map('intval', (array) ($data['group_ids'] ?? []));
         $tags = array_map('strval', (array) ($data['tags'] ?? []));
-        $phones = array_map('strval', (array) ($data['phones'] ?? []));
+        $phones = [...array_map('strval', (array) ($data['phones'] ?? [])), ...$this->filePhones($file)];
 
         foreach ($this->records['contacts'] ?? [] as $contact) {
             if (array_intersect($groupIds, array_column($contact['groups'], 'id')) !== [] || array_intersect($tags, $contact['tags']) !== []) {
@@ -419,10 +581,10 @@ final class FakeConnector extends Connector
         return [
             'id' => 1,
             'name' => 'Compte de test',
-            'credit_balance' => '100000.0000',
+            'credit_balance' => number_format($this->balance, 4, '.', ''),
             'currency' => 'XAF',
             'prices' => ['sms' => '25.0000', 'whatsapp' => '10.0000'],
-            'remaining' => ['sms' => 4000, 'whatsapp' => 10000],
+            'remaining' => ['sms' => (int) floor($this->balance / 25), 'whatsapp' => (int) floor($this->balance / 10)],
         ];
     }
 
@@ -700,12 +862,17 @@ final class FakeConnector extends Connector
     /**
      * L'exception que lèverait le client pour cette réponse de l'API.
      */
-    private function error(int $status, string $message): ApiException
+    /**
+     * @param  array<string, list<string>>  $errors
+     */
+    private function error(int $status, string $message, array $errors = []): ApiException
     {
+        $body = $errors === [] ? ['message' => $message] : ['message' => $message, 'errors' => $errors];
+
         return ApiException::fromResponse(new Response(new Psr7Response(
             $status,
-            ['Content-Type' => 'application/json'],
-            (string) json_encode(['message' => $message]),
+            ['Content-Type' => 'application/json'] + ($status === 429 || $status === 409 ? ['Retry-After' => '1'] : []),
+            (string) json_encode($body),
         )));
     }
 }

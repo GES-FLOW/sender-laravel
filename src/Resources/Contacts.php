@@ -5,6 +5,7 @@ namespace Gesflow\Sender\Resources;
 use Gesflow\Sender\Data\Contact;
 use Gesflow\Sender\Data\Page;
 use Gesflow\Sender\Support\Cast;
+use Illuminate\Support\LazyCollection;
 
 /**
  * Carnet d'adresses du compte.
@@ -22,6 +23,17 @@ class Contacts extends Resource
             'tag' => $tag,
             'page' => $page,
         ]), Contact::fromArray(...));
+    }
+
+    /**
+     * Tous les contacts (filtrés comme list()), les pages étant chargées au
+     * fil de l'itération.
+     *
+     * @return LazyCollection<int, Contact>
+     */
+    public function cursor(?string $search = null, ?int $groupId = null, ?string $tag = null): LazyCollection
+    {
+        return $this->cursorOf(fn (int $page): Page => $this->list($search, $groupId, $tag, $page));
     }
 
     public function find(int $id): Contact

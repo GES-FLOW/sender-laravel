@@ -4,6 +4,7 @@ namespace Gesflow\Sender\Tests;
 
 use Gesflow\Sender\Facades\GesflowSender;
 use Gesflow\Sender\GesflowSenderServiceProvider;
+use Gesflow\Sender\Support\PhoneNumber;
 use Illuminate\Support\Facades\Http;
 use Orchestra\Testbench\TestCase as Orchestra;
 
@@ -20,6 +21,13 @@ abstract class TestCase extends Orchestra
         parent::setUp();
 
         Http::preventStrayRequests();
+    }
+
+    protected function tearDown(): void
+    {
+        PhoneNumber::flush();
+
+        parent::tearDown();
     }
 
     protected function getPackageProviders($app): array

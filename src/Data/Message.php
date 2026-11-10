@@ -20,6 +20,9 @@ final class Message implements Arrayable, JsonSerializable
 
     /**
      * @param  array<string, mixed>  $attributes
+     * @param  CarbonImmutable|null  $deferredUntil  Heure d'envoi prévue quand l'anti-blocage WhatsApp étale les envois
+     * @param  string|null  $interactiveType  "location" ou "contact" pour un message WhatsApp interactif
+     * @param  bool  $replayable  Le message en échec peut être renvoyé depuis l'application web
      */
     public function __construct(
         public readonly int $id,
@@ -38,6 +41,11 @@ final class Message implements Arrayable, JsonSerializable
         public readonly ?CarbonImmutable $sentAt,
         public readonly ?CarbonImmutable $createdAt,
         public readonly array $attributes,
+        public readonly string $currency = 'XAF',
+        public readonly ?CarbonImmutable $deferredUntil = null,
+        public readonly ?string $interactiveType = null,
+        public readonly bool $replayable = false,
+        public readonly ?CarbonImmutable $replayedAt = null,
     ) {}
 
     /**
@@ -62,6 +70,11 @@ final class Message implements Arrayable, JsonSerializable
             sentAt: Cast::date($data['sent_at'] ?? null),
             createdAt: Cast::date($data['created_at'] ?? null),
             attributes: $data,
+            currency: (string) ($data['currency'] ?? 'XAF'),
+            deferredUntil: Cast::date($data['deferred_until'] ?? null),
+            interactiveType: Cast::nullableString($data['interactive_type'] ?? null),
+            replayable: (bool) ($data['replayable'] ?? false),
+            replayedAt: Cast::date($data['replayed_at'] ?? null),
         );
     }
 

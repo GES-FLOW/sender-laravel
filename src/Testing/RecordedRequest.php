@@ -8,13 +8,15 @@ namespace Gesflow\Sender\Testing;
 final class RecordedRequest
 {
     /**
-     * @param  array<string, mixed>  $data  Corps JSON ou paramètres de requête
+     * @param  array<string, mixed>  $data  Corps JSON, champs du formulaire ou paramètres de requête
+     * @param  array<string, array{filename: string, contents: string}>  $files  Fichiers envoyés
      */
     public function __construct(
         public readonly string $method,
         public readonly string $path,
         public readonly array $data,
         public readonly ?string $idempotencyKey,
+        public readonly array $files = [],
     ) {}
 
     /**

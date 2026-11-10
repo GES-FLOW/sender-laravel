@@ -9,7 +9,9 @@ use Gesflow\Sender\Enums\Channel;
 use Gesflow\Sender\Enums\MediaType;
 use Gesflow\Sender\Resources\Messages;
 use Gesflow\Sender\Support\Cast;
+use Illuminate\Http\UploadedFile;
 use InvalidArgumentException;
+use SplFileInfo;
 
 /**
  * Un envoi en masse en cours de préparation : le même texte, personnalisé
@@ -43,6 +45,9 @@ class PendingBulkMessage
     protected ?MediaType $mediaType = null;
 
     protected ?string $idempotencyKey = null;
+
+    /** @var array{contents: string, filename: string}|null */
+    protected ?array $file = null;
 
     public function __construct(
         protected Messages $messages,
@@ -85,6 +90,29 @@ class PendingBulkMessage
     public function toTags(array $tags): static
     {
         $this->tags = [...$this->tags, ...array_map('strval', $tags)];
+
+        return $this;
+    }
+
+    /**
+     * Ajoute les numéros d'un fichier de contacts CSV ou XLSX (10 Mo au
+     * plus) : sur chaque ligne, la première cellule qui ressemble à un
+     * numéro est retenue ; les en-têtes et autres colonnes sont ignorés.
+     */
+    public function toNumbersFromFile(string|SplFileInfo $file): static
+    {
+        $path = $file instanceof SplFileInfo ? $file->getRealPath() : $file;
+        $filename = $file instanceof UploadedFile ? $file->getClientOriginalName() : basename((string) $path);
+
+        if (! is_string($path) || ! is_file($path) || ! is_readable($path)) {
+            throw new InvalidArgumentException('Fichier de contacts introuvable ou illisible.');
+        }
+
+        if (! in_array(strtolower(pathinfo($filename, PATHINFO_EXTENSION)), ['csv', 'txt', 'xlsx'], true)) {
+            throw new InvalidArgumentException('Le fichier de contacts doit être au format CSV ou XLSX.');
+        }
+
+        $this->file = ['contents' => (string) file_get_contents($path), 'filename' => $filename];
 
         return $this;
     }
@@ -171,8 +199,8 @@ class PendingBulkMessage
      */
     public function toArray(): array
     {
-        if ($this->phones === [] && $this->groupIds === [] && $this->tags === []) {
-            throw new InvalidArgumentException('Indiquez des destinataires avec to(), toGroups() ou toTags().');
+        if ($this->phones === [] && $this->groupIds === [] && $this->tags === [] && $this->file === null) {
+            throw new InvalidArgumentException('Indiquez des destinataires avec to(), toGroups(), toTags() ou toNumbersFromFile().');
         }
 
         $payload = array_filter([
@@ -204,6 +232,6 @@ class PendingBulkMessage
 
     public function send(): MessageBatch
     {
-        return $this->messages->sendBulk($this->toArray(), $this->idempotencyKey);
+        return $this->messages->sendBulk($this->toArray(), $this->idempotencyKey, $this->file);
     }
 }

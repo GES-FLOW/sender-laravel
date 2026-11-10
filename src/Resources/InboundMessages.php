@@ -7,6 +7,7 @@ use DateTimeInterface;
 use Gesflow\Sender\Data\InboundMessage;
 use Gesflow\Sender\Data\Page;
 use Gesflow\Sender\Support\Cast;
+use Illuminate\Support\LazyCollection;
 
 /**
  * Messages reçus (réponses SMS et messages WhatsApp entrants).
@@ -25,5 +26,16 @@ class InboundMessages extends Resource
             'since' => $since === null ? null : CarbonImmutable::instance($since)->utc()->format('Y-m-d H:i:s'),
             'page' => $page,
         ]), InboundMessage::fromArray(...));
+    }
+
+    /**
+     * Tous les messages reçus (filtrés comme list()), les pages étant
+     * chargées au fil de l'itération.
+     *
+     * @return LazyCollection<int, InboundMessage>
+     */
+    public function cursor(?string $phone = null, ?DateTimeInterface $since = null): LazyCollection
+    {
+        return $this->cursorOf(fn (int $page): Page => $this->list($phone, $since, $page));
     }
 }

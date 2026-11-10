@@ -29,6 +29,7 @@ final class OtpVerification implements Arrayable, JsonSerializable
         public readonly bool $sandbox,
         public readonly ?string $code,
         public readonly array $attributes,
+        public readonly string $status = 'pending',
     ) {}
 
     /**
@@ -45,6 +46,7 @@ final class OtpVerification implements Arrayable, JsonSerializable
             sandbox: (bool) ($data['sandbox'] ?? false),
             code: Cast::nullableString($data['code'] ?? null),
             attributes: $data,
+            status: (string) ($data['status'] ?? 'pending'),
         );
     }
 }

@@ -7,7 +7,8 @@ SDK Laravel officiel de [GESFLOW SENDER](https://sender.gesflow.com) : envoyez d
 - Codes OTP générés et vérifiés par la plateforme
 - Webhooks signés transformés en événements Laravel
 - Clé d'idempotence automatique et nouvelles tentatives sûres : un message n'est jamais envoyé deux fois
-- `GesflowSender::fake()` pour tester votre code sans rien envoyer
+- Plusieurs comptes (une clé API par client), estimation du nombre de SMS facturés, envoi depuis un fichier CSV/XLSX
+- `GesflowSender::fake()` pour tester votre code sans rien envoyer, et `php artisan gesflow-sender:check` pour vérifier l'installation
 
 Laravel 12 ou 13, PHP 8.2 ou plus récent.
 
@@ -28,6 +29,12 @@ GESFLOW_SENDER_SENDER_ID=MaMarque
 
 Commencez avec une **clé de test (sandbox)** : les envois sont simulés, rien n'est débité, et le numéro `242000000000` échoue toujours pour tester vos cas d'erreur.
 
+Vérifiez l'installation (clé API, Sender ID, webhooks) ; `--to` envoie en plus un SMS de test :
+
+```bash
+php artisan gesflow-sender:check --to=242066123456
+```
+
 Pour modifier les autres réglages, publiez le fichier de configuration :
 
 ```bash
@@ -46,7 +53,13 @@ $message->status;  // MessageStatus::Sent, ::Processing, ::Scheduled ou ::Failed
 $message->price;   // 25.0 (FCFA)
 ```
 
-Les numéros s'écrivent avec l'indicatif du pays ; espaces et `+` sont acceptés (`+242 06 612 34 56`).
+Les numéros s'écrivent avec l'indicatif du pays ; espaces et `+` sont acceptés (`+242 06 612 34 56`). Si votre base contient des numéros au format local (`06 612 34 56`), définissez l'indicatif à leur ajouter :
+
+```dotenv
+GESFLOW_SENDER_DEFAULT_COUNTRY_CODE=242
+```
+
+Les numéros d'un autre pays doivent alors commencer par `+` ou `00`. Pour un plan de numérotation où le 0 initial disparaît à l'international, fournissez votre propre règle : `PhoneNumber::normalizeUsing(fn (string $numero) => ...)` (dans un service provider).
 
 Options disponibles avant `send()` :
 
@@ -60,6 +73,23 @@ GesflowSender::sms('242066123456', 'Rappel : rendez-vous demain à 10 h.')
 ```
 
 `flash()` envoie un SMS « flash », affiché directement à l'écran du destinataire.
+
+### Combien de SMS seront facturés ?
+
+Un SMS est facturé par partie : 160 caractères tiennent dans un SMS (153 par partie au-delà), mais un seul caractère hors de l'alphabet GSM (« ê », « ç », emoji…) ramène la limite à 70 (67 par partie).
+
+```php
+use Gesflow\Sender\Support\SmsCounter;
+
+$count = SmsCounter::count('Votre commande est prête.');
+
+$count->segments;           // 1
+$count->encoding;           // SmsEncoding::Ucs2, à cause du « ê »
+$count->unicodeCharacters;  // ['ê']
+$count->remaining;          // caractères restants avant le SMS suivant
+
+GesflowSender::smsCost('Votre commande est prête.', recipients: 500);  // prix estimé au tarif de votre compte
+```
 
 ## Envoyer un message WhatsApp
 
@@ -100,6 +130,24 @@ foreach ($batch as $message) {
 Les variables `{{ nom }}`, `{{ prenom }}`, `{{ telephone }}` et les champs personnalisés de vos contacts (`{{ ville }}`…) sont remplacés pour chaque destinataire ; `{{ variable|texte }}` donne une valeur par défaut.
 
 `GesflowSender::bulkWhatsapp('...')->media(MediaType::Image, $url)` envoie un média à chaque destinataire.
+
+Les destinataires peuvent aussi venir d'un fichier CSV ou XLSX (10 Mo au plus) : sur chaque ligne, la première cellule qui ressemble à un numéro est retenue. Un fichier envoyé par formulaire (`$request->file('contacts')`) est accepté tel quel.
+
+```php
+GesflowSender::bulkSms('Promo !')->toNumbersFromFile(storage_path('app/clients.csv'))->send();
+```
+
+## Plusieurs comptes
+
+Si chacun de vos clients a son propre compte GESFLOW SENDER, envoyez avec sa clé API :
+
+```php
+GesflowSender::withApiKey($boutique->gesflow_api_key, $boutique->sender_id)
+    ->sms('242066123456', 'Votre commande est en route.')
+    ->send();
+```
+
+Le client retourné accepte toutes les opérations (`otp()`, `contacts()`, `account()`…) ; la configuration par défaut n'est pas modifiée.
 
 ## Notifications Laravel
 
@@ -213,6 +261,12 @@ Event::listen(function (MessageReceived $event) {
 
 La route n'utilise ni session ni jeton CSRF. Une requête mal signée, ou vieille de plus de 5 minutes, est refusée (403) ; sans secret configuré, tous les webhooks sont refusés. Un webhook déjà traité avec succès (même `X-Gesflow-Delivery`) est ignoré ; si l'un de vos listeners lève une exception, la plateforme le renverra (3 tentatives, à 60 secondes d'intervalle).
 
+Les webhooks déjà traités sont mémorisés 24 heures dans le cache : choisissez un store partagé et persistant (`redis`, `database`…) avec `GESFLOW_SENDER_WEBHOOK_CACHE_STORE` si votre store par défaut est `array`. La plateforme coupe la connexion au bout de 10 secondes : pour un traitement long, utilisez un listener en file d'attente (`implements ShouldQueue`).
+
+**Changer de secret sans rien perdre.** Après une régénération du secret, la plateforme signe aussi chaque webhook avec l'ancien secret pendant 24 heures (en-tête `X-Gesflow-Previous-Signature`) : votre application continue d'accepter les webhooks le temps de mettre `GESFLOW_SENDER_WEBHOOK_SECRET` à jour.
+
+**Plusieurs comptes.** Indiquez les secrets de tous vos comptes, séparés par des virgules : `GESFLOW_SENDER_WEBHOOK_SECRET=whsec_compte1,whsec_compte2`.
+
 `WebhookReceived` est déclenché pour tout webhook valide, avec son type et son contenu bruts.
 
 Changez l'adresse avec `GESFLOW_SENDER_WEBHOOK_PATH`, ou désactivez la route en mettant `webhooks.path` à `null` dans `config/gesflow-sender.php` (vous pouvez alors utiliser le middleware `Gesflow\Sender\Http\Middleware\VerifyWebhookSignature` sur votre propre route).
@@ -246,7 +300,19 @@ GesflowSender::payments()->fees()->totalFor(10000);          // montant total pa
 GesflowSender::payments()->initiate(10000, '242066123456', 'mtn');  // recharge Mobile Money (mtn ou airtel)
 ```
 
-Les listes retournent une `Page` : `items`, `total`, `currentPage`, `lastPage`, `hasMorePages()`, `nextPage()`. Chaque objet retourné expose aussi la réponse brute de l'API : `$message->get('deferred_until')`, `$message->toArray()`.
+Les listes retournent une `Page` : `items`, `total`, `currentPage`, `lastPage`, `hasMorePages()`, `nextPage()`. Pour tout parcourir, `cursor()` charge les pages au fil de l'itération :
+
+```php
+GesflowSender::contacts()->cursor(tag: 'vip')->each(function (Contact $contact) {
+    // ...
+});
+
+GesflowSender::transactionsCursor(TransactionType::MessageRefund)->sum(fn (CreditTransaction $t) => $t->amount);
+```
+
+`cursor()` existe pour les messages, campagnes, contacts, groupes, modèles, messages reçus et recharges.
+
+Les statuts ont leurs enums : `$payment->paymentStatus()` (`PaymentStatus`), `$payment->isPending()`, `$transaction->transactionType()` (`TransactionType`), `MobileMoneyOperator::Mtn` pour `initiate()`. Chaque objet retourné expose aussi la réponse brute de l'API : `$message->get('interactive_payload')`, `$message->toArray()`.
 
 ## Erreurs
 
@@ -276,7 +342,7 @@ try {
 }
 ```
 
-Les erreurs réseau et 5xx sont retentées automatiquement (2 fois par défaut) avec la même clé d'idempotence : la plateforme renvoie alors la réponse du premier essai au lieu d'envoyer un second message.
+Les erreurs réseau, les erreurs 502, 503 et 504 et les 409 sont retentées automatiquement (2 fois par défaut) avec la même clé d'idempotence : la plateforme renvoie alors la réponse du premier essai au lieu d'envoyer un second message. Une erreur 500 lors d'un envoi n'est pas retentée, car le message a pu être créé : vérifiez avec `messages()->list()` avant de renvoyer. Les lectures (GET) sont retentées sur toute erreur 5xx.
 
 ## Tests
 
@@ -298,13 +364,24 @@ it('prévient le client quand sa commande part', function () {
 
 Assertions disponibles : `assertSent()`, `assertNotSent()`, `assertSentTo()`, `assertNotSentTo()`, `assertSentCount()`, `assertNothingSent()`, `assertBulkSent()`, `assertOtpSent()`. Les callbacks reçoivent le `Message` et le corps de la requête. `$fake->sent()` et `$fake->requests()` donnent accès à tout ce qui a été envoyé.
 
-Comme avec une clé sandbox, les messages passent à `sent` (`scheduled` s'ils sont programmés) et le numéro `242000000000` échoue. Le code OTP est toujours `123456` (ou ses premiers chiffres selon `codeLength`). Contacts, groupes, modèles et paiements sont conservés en mémoire le temps du test.
+Comme avec une clé sandbox, les messages passent à `sent` (`scheduled` s'ils sont programmés) et le numéro `242000000000` échoue. Le code OTP est toujours `123456` (ou ses premiers chiffres selon `codeLength`). Contacts, groupes, modèles, paiements et numéros d'un fichier CSV sont conservés en mémoire le temps du test.
 
-Pour simuler une erreur de l'API, utilisez plutôt `Http::fake()`, que le client respecte :
+Le faux client simule aussi les erreurs, le solde et les webhooks :
 
 ```php
-Http::fake(['*/api/v1/messages' => Http::response(['message' => 'Solde de crédits insuffisant.'], 422)]);
+$fake = GesflowSender::fake()
+    ->withBalance(500)
+    ->failWith(422, 'Solde de crédits insuffisant pour envoyer ce message.', endpoint: 'POST messages*');
+
+$fake->failWith(503, times: 1);                                          // la prochaine requête seulement
+$fake->failWith(422, 'Numéro invalide.', ['phone' => ['Numéro invalide.']]);  // ValidationException
+$fake->stopFailing();
+
+$fake->updateStatus($message, MessageStatus::Failed, 'Abonné absent.');  // déclenche MessageStatusUpdated
+$fake->receive('242066123456', 'STOP');                                 // déclenche MessageReceived
 ```
+
+`Http::fake()` reste utilisable avec le vrai client, pour tester une réponse précise de l'API.
 
 Pour tester vos listeners de webhooks, signez la requête avec `WebhookSignature::headers()` :
 
@@ -324,14 +401,16 @@ $this->postJson('/gesflow-sender/webhook', $payload, WebhookSignature::headers(
 |---|---|---|
 | `GESFLOW_SENDER_API_KEY` | — | Clé API (production ou sandbox) |
 | `GESFLOW_SENDER_SENDER_ID` | — | Sender ID par défaut des SMS |
+| `GESFLOW_SENDER_DEFAULT_COUNTRY_CODE` | — | Indicatif ajouté aux numéros au format local (`242`) |
 | `GESFLOW_SENDER_BASE_URL` | `https://sender.gesflow.com/api/v1` | URL de l'API |
 | `GESFLOW_SENDER_TIMEOUT` | `30` | Délai maximal d'une requête, en secondes |
 | `GESFLOW_SENDER_CONNECT_TIMEOUT` | `10` | Délai maximal de connexion, en secondes |
-| `GESFLOW_SENDER_RETRIES` | `2` | Nouvelles tentatives après une erreur réseau ou 5xx |
+| `GESFLOW_SENDER_RETRIES` | `2` | Nouvelles tentatives après une erreur réseau, 502, 503, 504 ou 409 |
 | `GESFLOW_SENDER_RETRY_DELAY` | `500` | Attente entre deux tentatives, en millisecondes |
-| `GESFLOW_SENDER_WEBHOOK_SECRET` | — | Secret de signature des webhooks |
+| `GESFLOW_SENDER_WEBHOOK_SECRET` | — | Secret(s) de signature des webhooks, séparés par des virgules |
 | `GESFLOW_SENDER_WEBHOOK_PATH` | `gesflow-sender/webhook` | Adresse de la route des webhooks |
 | `GESFLOW_SENDER_WEBHOOK_TOLERANCE` | `300` | Âge maximal d'un webhook, en secondes |
+| `GESFLOW_SENDER_WEBHOOK_CACHE_STORE` | store par défaut | Cache des webhooks déjà traités |
 
 Documentation complète de l'API : [sender.gesflow.com/docs/api](https://sender.gesflow.com/docs/api).
 

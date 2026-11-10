@@ -37,6 +37,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Indicatif par défaut
+    |--------------------------------------------------------------------------
+    |
+    | Ajouté aux numéros écrits sans indicatif : avec « 242 », « 06 612 34 56 »
+    | devient « 242066123456 ». Les numéros d'un autre pays doivent alors
+    | commencer par « + » ou « 00 ». Laissé vide, les numéros sont envoyés
+    | tels quels (chiffres seulement).
+    |
+    */
+
+    'default_country_code' => env('GESFLOW_SENDER_DEFAULT_COUNTRY_CODE'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Délais et nouvelles tentatives
     |--------------------------------------------------------------------------
     |
@@ -59,9 +73,14 @@ return [
     |--------------------------------------------------------------------------
     |
     | secret : affiché dans Compte → Entreprise (« Signature des webhooks »).
+    | Plusieurs secrets séparés par des virgules sont acceptés, un par compte
+    | GESFLOW SENDER qui appelle l'application.
     | path : URL de réception enregistrée par le paquet (POST), à indiquer
     | comme callback_url ou comme URL des messages entrants. null la désactive.
     | tolerance : âge maximal d'un webhook, en secondes.
+    | cache_store : store de cache qui mémorise les webhooks déjà traités
+    | (null : store par défaut). Il doit être partagé et persistant : pas
+    | « array ».
     |
     */
 
@@ -69,6 +88,7 @@ return [
         'secret' => env('GESFLOW_SENDER_WEBHOOK_SECRET'),
         'path' => env('GESFLOW_SENDER_WEBHOOK_PATH', 'gesflow-sender/webhook'),
         'tolerance' => (int) env('GESFLOW_SENDER_WEBHOOK_TOLERANCE', 300),
+        'cache_store' => env('GESFLOW_SENDER_WEBHOOK_CACHE_STORE'),
     ],
 
 ];

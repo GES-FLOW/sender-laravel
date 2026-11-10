@@ -4,6 +4,7 @@ namespace Gesflow\Sender\Resources;
 
 use Gesflow\Sender\Data\ContactGroup;
 use Gesflow\Sender\Data\Page;
+use Illuminate\Support\LazyCollection;
 
 /**
  * Groupes de contacts, utilisables comme destinataires d'un envoi en masse.
@@ -16,6 +17,16 @@ class ContactGroups extends Resource
     public function list(int $page = 1): Page
     {
         return Page::fromResponse($this->connector->get('contact-groups', ['page' => $page]), ContactGroup::fromArray(...));
+    }
+
+    /**
+     * Tous les groupes, les pages étant chargées au fil de l'itération.
+     *
+     * @return LazyCollection<int, ContactGroup>
+     */
+    public function cursor(): LazyCollection
+    {
+        return $this->cursorOf(fn (int $page): Page => $this->list($page));
     }
 
     public function create(string $name, ?string $description = null): ContactGroup

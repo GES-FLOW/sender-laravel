@@ -141,3 +141,41 @@ it('computes the signature like the platform', function () {
     expect(WebhookSignature::compute($body, '1762767000', 'secret'))
         ->toBe('sha256='.hash_hmac('sha256', '1762767000.'.$body, 'secret'));
 });
+
+it('accepts the previous secret signature sent after a regeneration', function () {
+    Event::fake([MessageStatusUpdated::class]);
+    $payload = messageData();
+    $body = (string) json_encode($payload);
+    $headers = WebhookSignature::headers($body, 'message.status', 'whsec_nouveau');
+    $headers[WebhookSignature::PREVIOUS_SIGNATURE_HEADER] = WebhookSignature::compute($body, $headers[WebhookSignature::TIMESTAMP_HEADER], TestCase::WEBHOOK_SECRET);
+
+    test()->postJson('/gesflow-sender/webhook', $payload, $headers)->assertOk();
+
+    Event::assertDispatched(MessageStatusUpdated::class);
+});
+
+it('accepts any of several configured secrets', function () {
+    config()->set('gesflow-sender.webhooks.secret', 'whsec_compte_a, whsec_compte_b');
+    Event::fake([MessageStatusUpdated::class]);
+
+    postWebhook(messageData(), secret: 'whsec_compte_b')->assertOk();
+    postWebhook(messageData(['id' => 43]), secret: TestCase::WEBHOOK_SECRET)->assertForbidden();
+
+    Event::assertDispatchedTimes(MessageStatusUpdated::class, 1);
+});
+
+it('remembers the processed deliveries in the configured cache store', function () {
+    config()->set('cache.stores.webhooks', ['driver' => 'array']);
+    config()->set('gesflow-sender.webhooks.cache_store', 'webhooks');
+
+    postWebhook(messageData())->assertOk();
+
+    expect(cache()->store('webhooks')->has('gesflow-sender:webhook:a1b2c3d4-0000-4000-8000-000000000001'))->toBeTrue()
+        ->and(cache()->store('array')->has('gesflow-sender:webhook:a1b2c3d4-0000-4000-8000-000000000001'))->toBeFalse();
+});
+
+it('parses the configured secrets', function () {
+    expect(WebhookSignature::secrets(' a , ,b '))->toBe(['a', 'b'])
+        ->and(WebhookSignature::secrets(['a', '', 'c']))->toBe(['a', 'c'])
+        ->and(WebhookSignature::secrets(null))->toBe([]);
+});

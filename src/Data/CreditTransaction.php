@@ -3,6 +3,7 @@
 namespace Gesflow\Sender\Data;
 
 use Carbon\CarbonImmutable;
+use Gesflow\Sender\Enums\TransactionType;
 use Gesflow\Sender\Support\Cast;
 use Illuminate\Contracts\Support\Arrayable;
 use JsonSerializable;
@@ -48,5 +49,14 @@ final class CreditTransaction implements Arrayable, JsonSerializable
             createdAt: Cast::date($data['created_at'] ?? null),
             attributes: $data,
         );
+    }
+
+    /**
+     * La nature du mouvement sous forme d'enum (null pour un type que le SDK
+     * ne connaît pas).
+     */
+    public function transactionType(): ?TransactionType
+    {
+        return TransactionType::tryFrom($this->type);
     }
 }

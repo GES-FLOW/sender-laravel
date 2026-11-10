@@ -3,6 +3,7 @@
 namespace Gesflow\Sender\Data;
 
 use Carbon\CarbonImmutable;
+use Gesflow\Sender\Enums\PaymentStatus;
 use Gesflow\Sender\Support\Cast;
 use Illuminate\Contracts\Support\Arrayable;
 use JsonSerializable;
@@ -62,8 +63,29 @@ final class Payment implements Arrayable, JsonSerializable
         );
     }
 
+    /**
+     * Le statut sous forme d'enum (null pour un statut que le SDK ne connaît pas).
+     */
+    public function paymentStatus(): ?PaymentStatus
+    {
+        return PaymentStatus::tryFrom($this->status);
+    }
+
     public function isSuccessful(): bool
     {
-        return $this->status === 'success';
+        return $this->status === PaymentStatus::Success->value;
+    }
+
+    /**
+     * En attente de la confirmation du payeur ou du prestataire.
+     */
+    public function isPending(): bool
+    {
+        return in_array($this->paymentStatus(), [PaymentStatus::Pending, PaymentStatus::Processing], true);
+    }
+
+    public function isFailed(): bool
+    {
+        return $this->status === PaymentStatus::Failed->value;
     }
 }

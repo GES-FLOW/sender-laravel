@@ -8,7 +8,9 @@ use Gesflow\Sender\Events\MessageReceived;
 use Gesflow\Sender\Events\MessageStatusUpdated;
 use Gesflow\Sender\Events\WebhookReceived;
 use Gesflow\Sender\Webhooks\WebhookSignature;
+use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository as Cache;
+use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,7 +23,9 @@ use Illuminate\Support\Carbon;
  * Un webhook est renvoyé avec le même X-Gesflow-Delivery tant que votre
  * application ne répond pas 2xx : une livraison déjà traitée avec succès
  * est ignorée, une livraison dont un listener a levé une exception sera
- * traitée de nouveau au prochain essai.
+ * traitée de nouveau au prochain essai. Les livraisons traitées sont
+ * mémorisées 24 heures dans le cache (webhooks.cache_store) : utilisez un
+ * store partagé et persistant (redis, database…), pas « array ».
  */
 class WebhookController
 {
@@ -29,10 +33,17 @@ class WebhookController
 
     public const EVENT_MESSAGE_RECEIVED = 'message.received';
 
+    protected Cache $cache;
+
     public function __construct(
         protected Dispatcher $events,
-        protected Cache $cache,
-    ) {}
+        CacheFactory $cache,
+        Config $config,
+    ) {
+        $store = $config->get('gesflow-sender.webhooks.cache_store');
+
+        $this->cache = $cache->store(is_string($store) && $store !== '' ? $store : null);
+    }
 
     public function __invoke(Request $request): JsonResponse
     {

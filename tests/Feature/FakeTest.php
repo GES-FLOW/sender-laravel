@@ -3,12 +3,18 @@
 use Gesflow\Sender\Data\Message;
 use Gesflow\Sender\Enums\MessageStatus;
 use Gesflow\Sender\Enums\OtpStatus;
+use Gesflow\Sender\Events\MessageReceived;
+use Gesflow\Sender\Events\MessageStatusUpdated;
+use Gesflow\Sender\Events\WebhookReceived;
 use Gesflow\Sender\Exceptions\NotFoundException;
+use Gesflow\Sender\Exceptions\RateLimitException;
 use Gesflow\Sender\Exceptions\RequestRejectedException;
+use Gesflow\Sender\Exceptions\ValidationException;
 use Gesflow\Sender\Facades\GesflowSender;
 use Gesflow\Sender\GesflowSender as GesflowSenderClient;
 use Gesflow\Sender\Testing\GesflowSenderFake;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\ExpectationFailedException;
 
@@ -160,4 +166,55 @@ it('can be built directly', function () {
     expect($fake->sms('242066123456', 'Bonjour')->send()->from)->toBe('MaMarque')
         ->and($fake->requests())->toHaveCount(1)
         ->and($fake->requests()[0]->get('phone'))->toBe('242066123456');
+});
+
+it('fails like the API when asked to', function () {
+    $fake = GesflowSender::fake()->failWith(422, 'Solde de crédits insuffisant pour envoyer ce message.', endpoint: 'POST messages');
+
+    expect(fn () => GesflowSender::sms('242066123456', 'Test')->send())
+        ->toThrow(RequestRejectedException::class, 'Solde de crédits insuffisant')
+        ->and(GesflowSender::balance())->toBe(100000.0);
+
+    $fake->stopFailing();
+
+    expect(GesflowSender::sms('242066123456', 'Test')->send()->isSent())->toBeTrue();
+});
+
+it('fails a given number of times, with validation errors', function () {
+    GesflowSender::fake()
+        ->failWith(422, 'Le numéro est invalide.', ['phone' => ['Le numéro est invalide.']], times: 1)
+        ->failWith(429, 'Trop de requêtes.', endpoint: 'GET account');
+
+    expect(fn () => GesflowSender::sms('242066123456', 'Test')->send())
+        ->toThrow(fn (ValidationException $exception) => expect($exception->errors())->toBe(['phone' => ['Le numéro est invalide.']]))
+        ->and(GesflowSender::sms('242066123456', 'Test')->send()->id)->toBeInt()
+        ->and(fn () => GesflowSender::account())
+        ->toThrow(fn (RateLimitException $exception) => expect($exception->retryAfter())->toBe(1));
+});
+
+it('sets the balance of the fake account', function () {
+    GesflowSender::fake()->withBalance(250);
+
+    expect(GesflowSender::balance())->toBe(250.0)
+        ->and(GesflowSender::account()->remainingSms)->toBe(10);
+});
+
+it('simulates delivery reports and replies with their events', function () {
+    Event::fake([MessageStatusUpdated::class, MessageReceived::class, WebhookReceived::class]);
+    $fake = GesflowSender::fake();
+
+    $message = GesflowSender::sms('242066123456', 'Votre colis est en route.')->send();
+    $failed = $fake->updateStatus($message, MessageStatus::Failed, 'Abonné absent.');
+    $reply = $fake->receive('+242 06 612 34 56', 'Merci !');
+
+    expect($failed->failureReason)->toBe('Abonné absent.')
+        ->and(GesflowSender::messages()->find($message->id)->isFailed())->toBeTrue()
+        ->and($reply->phone)->toBe('242066123456')
+        ->and(GesflowSender::inboundMessages()->list()->items[0]->text)->toBe('Merci !');
+
+    Event::assertDispatched(MessageStatusUpdated::class, fn (MessageStatusUpdated $event): bool => $event->message->id === $message->id
+        && $event->message->failureReason === 'Abonné absent.'
+        && $event->deliveryId !== null);
+    Event::assertDispatched(MessageReceived::class, fn (MessageReceived $event): bool => $event->message->text === 'Merci !');
+    Event::assertDispatchedTimes(WebhookReceived::class, 2);
 });

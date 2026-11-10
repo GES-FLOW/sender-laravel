@@ -2,10 +2,20 @@
 
 namespace Gesflow\Sender\Testing;
 
+use Gesflow\Sender\Data\InboundMessage;
 use Gesflow\Sender\Data\Message;
+use Gesflow\Sender\Enums\Channel;
+use Gesflow\Sender\Enums\MessageStatus;
+use Gesflow\Sender\Events\MessageReceived;
+use Gesflow\Sender\Events\MessageStatusUpdated;
+use Gesflow\Sender\Events\WebhookReceived;
 use Gesflow\Sender\GesflowSender;
+use Gesflow\Sender\Http\Controllers\WebhookController;
 use Gesflow\Sender\Support\Cast;
+use Illuminate\Container\Container;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 use PHPUnit\Framework\Assert as PHPUnit;
 
 /**
@@ -22,6 +32,82 @@ class GesflowSenderFake extends GesflowSender
         $this->api = new FakeConnector($defaultSenderId);
 
         parent::__construct($this->api, $defaultSenderId);
+    }
+
+    /**
+     * Fait échouer les requêtes comme le ferait l'API : la bonne exception
+     * est levée (RequestRejectedException pour un 422 sans détail,
+     * ValidationException avec $errors, RateLimitException pour un 429…).
+     *
+     *     $fake->failWith(422, 'Solde de crédits insuffisant pour envoyer ce message.');
+     *     $fake->failWith(503, endpoint: 'GET account', times: 1);
+     *
+     * @param  array<string, list<string>>  $errors  Erreurs de validation, par champ
+     * @param  string  $endpoint  Requêtes visées, « MÉTHODE chemin » avec jokers : « POST messages* »
+     * @param  int|null  $times  Nombre d'échecs avant de répondre normalement (null : toujours)
+     */
+    public function failWith(int $status, ?string $message = null, array $errors = [], string $endpoint = '*', ?int $times = null): static
+    {
+        $this->api->failWith($status, $message ?? "Erreur HTTP {$status} simulée.", $errors, $endpoint, $times);
+
+        return $this;
+    }
+
+    /**
+     * Annule les échecs configurés avec failWith().
+     */
+    public function stopFailing(): static
+    {
+        $this->api->stopFailing();
+
+        return $this;
+    }
+
+    /**
+     * Solde renvoyé par account() et balance() (100 000 FCFA par défaut).
+     */
+    public function withBalance(float $balance): static
+    {
+        $this->api->setBalance($balance);
+
+        return $this;
+    }
+
+    /**
+     * Simule un accusé de remise : met le message à jour et déclenche les
+     * événements du webhook « message.status » (MessageStatusUpdated et
+     * WebhookReceived), comme si la plateforme avait appelé votre route.
+     */
+    public function updateStatus(Message|int $message, MessageStatus|string $status, ?string $failureReason = null): Message
+    {
+        $id = $message instanceof Message ? $message->id : $message;
+        $status = $status instanceof MessageStatus ? $status : MessageStatus::from($status);
+        $updated = Message::fromArray($this->api->updateMessageStatus($id, $status->value, $failureReason));
+
+        $this->dispatchWebhook(WebhookController::EVENT_MESSAGE_STATUS, $updated->toArray(), new MessageStatusUpdated($updated, $deliveryId = (string) Str::uuid()), $deliveryId);
+
+        return $updated;
+    }
+
+    /**
+     * Simule la réponse d'un destinataire : le message est listé par
+     * inboundMessages() et les événements du webhook « message.received »
+     * (MessageReceived et WebhookReceived) sont déclenchés.
+     */
+    public function receive(string $phone, string $text, Channel|string $channel = Channel::Sms): InboundMessage
+    {
+        $channel = $channel instanceof Channel ? $channel : Channel::from($channel);
+        $message = InboundMessage::fromArray($this->api->receive(Cast::phone($phone), $text, $channel->value));
+        $deliveryId = (string) Str::uuid();
+
+        $this->dispatchWebhook(
+            WebhookController::EVENT_MESSAGE_RECEIVED,
+            ['event' => WebhookController::EVENT_MESSAGE_RECEIVED, 'data' => $message->toArray()],
+            new MessageReceived($message, $deliveryId),
+            $deliveryId,
+        );
+
+        return $message;
     }
 
     /**
@@ -141,6 +227,17 @@ class GesflowSenderFake extends GesflowSender
     public function requests(): array
     {
         return $this->api->requests();
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    protected function dispatchWebhook(string $event, array $payload, object $typedEvent, string $deliveryId): void
+    {
+        $events = Container::getInstance()->make(Dispatcher::class);
+
+        $events->dispatch(new WebhookReceived($event, $payload, $deliveryId));
+        $events->dispatch($typedEvent);
     }
 
     /**

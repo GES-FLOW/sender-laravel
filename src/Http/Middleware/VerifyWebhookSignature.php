@@ -10,9 +10,15 @@ use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 
 /**
- * Refuse (403) tout webhook qui n'est pas signé par GESFLOW SENDER avec le
- * secret configuré, ou qui est trop ancien. Sans secret configuré, tous
- * les webhooks sont refusés.
+ * Refuse (403) tout webhook qui n'est pas signé par GESFLOW SENDER avec un
+ * des secrets configurés, ou qui est trop ancien. Sans secret configuré,
+ * tous les webhooks sont refusés.
+ *
+ * Plusieurs secrets séparés par des virgules sont acceptés : un par compte
+ * GESFLOW SENDER qui appelle l'application. Après la régénération d'un
+ * secret, la plateforme signe aussi avec l'ancien pendant 24 heures
+ * (X-Gesflow-Previous-Signature) : l'application peut être mise à jour
+ * sans perdre de webhook.
  */
 class VerifyWebhookSignature
 {
@@ -23,17 +29,20 @@ class VerifyWebhookSignature
      */
     public function handle(Request $request, Closure $next): Response
     {
-        $secret = $this->config->get('gesflow-sender.webhooks.secret');
+        $secrets = WebhookSignature::secrets($this->config->get('gesflow-sender.webhooks.secret'));
 
-        if (! is_string($secret) || $secret === '') {
+        if ($secrets === []) {
             throw new AccessDeniedHttpException('Secret des webhooks non configuré (GESFLOW_SENDER_WEBHOOK_SECRET).');
         }
 
-        $isValid = WebhookSignature::verify(
+        $isValid = WebhookSignature::verifyAny(
             $request->getContent(),
-            $request->headers->get(WebhookSignature::SIGNATURE_HEADER),
+            [
+                $request->headers->get(WebhookSignature::SIGNATURE_HEADER),
+                $request->headers->get(WebhookSignature::PREVIOUS_SIGNATURE_HEADER),
+            ],
             $request->headers->get(WebhookSignature::TIMESTAMP_HEADER),
-            $secret,
+            $secrets,
             (int) $this->config->get('gesflow-sender.webhooks.tolerance', 300),
         );
 
