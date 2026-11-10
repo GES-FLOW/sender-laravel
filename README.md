@@ -9,7 +9,7 @@ SDK Laravel officiel de [GESFLOW SENDER](https://sender.gesflow.com) : envoyez d
 - Clé d'idempotence automatique et nouvelles tentatives sûres : un message n'est jamais envoyé deux fois
 - `GesflowSender::fake()` pour tester votre code sans rien envoyer
 
-Laravel 11 à 13, PHP 8.2 ou plus récent.
+Laravel 12 ou 13, PHP 8.2 ou plus récent.
 
 ## Installation
 

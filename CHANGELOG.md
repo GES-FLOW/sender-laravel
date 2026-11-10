@@ -4,7 +4,7 @@ Toutes les évolutions notables de `gesflow/sender-laravel` sont consignées ici
 
 ## 1.0.0 — 2026-11-10
 
-Première version.
+Première version, pour Laravel 12 et 13 (PHP 8.2 ou plus récent).
 
 - Envoi de SMS et de messages WhatsApp (texte, image, document, vidéo, note vocale, position, fiches contact), unitaire ou en masse (numéros, groupes, tags).
 - Canal de notification Laravel `gesflow-sender`, avec clé d'idempotence tirée de l'identifiant de la notification.
