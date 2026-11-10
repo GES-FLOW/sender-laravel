@@ -1,0 +1,70 @@
+{
+    "name": "gesflow/sender-laravel",
+    "description": "SDK Laravel officiel de GESFLOW SENDER : SMS, WhatsApp, codes OTP et webhooks.",
+    "keywords": [
+        "laravel",
+        "sms",
+        "whatsapp",
+        "otp",
+        "congo",
+        "gesflow"
+    ],
+    "homepage": "https://github.com/GES-FLOW/sender-laravel",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "GESFLOW"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/GES-FLOW/sender-laravel/issues",
+        "source": "https://github.com/GES-FLOW/sender-laravel",
+        "docs": "https://sender.gesflow.com/docs/api"
+    },
+    "require": {
+        "php": "^8.2",
+        "illuminate/contracts": "^11.0||^12.0||^13.0",
+        "illuminate/http": "^11.0||^12.0||^13.0",
+        "illuminate/notifications": "^11.0||^12.0||^13.0",
+        "illuminate/routing": "^11.0||^12.0||^13.0",
+        "illuminate/support": "^11.0||^12.0||^13.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0||^10.0||^11.0",
+        "pestphp/pest": "^3.0||^4.0",
+        "laravel/pint": "^1.0",
+        "phpstan/phpstan": "^2.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Gesflow\\Sender\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Gesflow\\Sender\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Gesflow\\Sender\\GesflowSenderServiceProvider"
+            ],
+            "aliases": {
+                "GesflowSender": "Gesflow\\Sender\\Facades\\GesflowSender"
+            }
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "analyse": "phpstan analyse --memory-limit=1G",
+        "format": "pint"
+    }
+}

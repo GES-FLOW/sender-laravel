@@ -1,0 +1,57 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: '8.2', laravel: '11.*', testbench: '9.*', pest: '3.*' }
+          - { php: '8.4', laravel: '12.*', testbench: '10.*', pest: '3.*' }
+          - { php: '8.5', laravel: '13.*', testbench: '11.*', pest: '4.*' }
+
+    name: PHP ${{ matrix.php }} — Laravel ${{ matrix.laravel }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Install dependencies
+        run: |
+          composer remove --dev phpstan/phpstan laravel/pint --no-update
+          composer require "illuminate/support:${{ matrix.laravel }}" --no-update
+          composer require "orchestra/testbench:${{ matrix.testbench }}" "pestphp/pest:${{ matrix.pest }}" --dev --no-update
+          composer update --prefer-dist --no-interaction --no-progress -W
+
+      - name: Run tests
+        run: vendor/bin/pest
+
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+
+      - run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Code style
+        run: vendor/bin/pint --test
+
+      - name: Static analysis
+        run: vendor/bin/phpstan analyse --memory-limit=1G --no-progress
